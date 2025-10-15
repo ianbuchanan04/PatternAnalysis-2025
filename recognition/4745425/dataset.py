@@ -1,78 +1,72 @@
 from pathlib import Path
-import os
-import torch
+import os, torch
 from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
 
-# ---- basic setup ----
-DATA_ROOT = Path("ADNI/AD_NC")   # change if needed
-BATCH_SIZE = 32
-IMG_SIZE = 224                    # 224 for ConvNeXt/ResNet; change if you like
-SEED = 42
+DATA_ROOT = Path("ADNI/AD_NC")
+# Precalculated values
+MEAN = 0.1155
+STD = 0.2254
 
-torch.manual_seed(SEED)
-torch.cuda.manual_seed_all(SEED)
-
-# If your images are grayscale (common in medical), set this True to force 3-channels
-GRAYSCALE_TO_RGB = True
-
-# ---- transforms ----
-# For pretrained ConvNeXt/ResNet use ImageNet stats:
-imagenet_mean = (0.485, 0.456, 0.406)
-imagenet_std  = (0.229, 0.224, 0.225)
-
-to_three_channels = (
-    [transforms.Grayscale(num_output_channels=3)] if GRAYSCALE_TO_RGB else []
-)
-
-train_tfms = transforms.Compose(
-    to_three_channels + [
-        transforms.Resize((IMG_SIZE, IMG_SIZE)),
-        # light augments; tweak as you like
-        transforms.RandomHorizontalFlip(p=0.5),
+def calculate_mean_std():
+    print("starting")
+    dataset = datasets.ImageFolder(
+    root=r"ADNI/AD_NC/train",
+    transform=transforms.Compose([
+        transforms.Grayscale(num_output_channels=1),
         transforms.ToTensor(),
-        transforms.Normalize(imagenet_mean, imagenet_std),
-    ]
-)
-
-test_tfms = transforms.Compose(
-    to_three_channels + [
-        transforms.Resize((IMG_SIZE, IMG_SIZE)),
-        transforms.ToTensor(),
-        transforms.Normalize(imagenet_mean, imagenet_std),
-    ]
-)
-
-# ---- datasets ----
-train_dir = DATA_ROOT / "train"
-test_dir  = DATA_ROOT / "test"
-
-train_ds = datasets.ImageFolder(root=train_dir, transform=train_tfms)
-test_ds  = datasets.ImageFolder(root=test_dir,  transform=test_tfms)
-
-# Class names & mapping (handy for metrics/plots)
-idx_to_class = {v: k for k, v in train_ds.class_to_idx.items()}
-print("Classes:", train_ds.classes)         # e.g. ['AD', 'NC']
-print("Mapping:", train_ds.class_to_idx)    # e.g. {'AD': 0, 'NC': 1}
-
-# ---- loaders ----
-def make_loader(ds, shuffle, batch_size=BATCH_SIZE):
-    return DataLoader(
-        ds,
-        batch_size=batch_size,
-        shuffle=shuffle,
-        num_workers=max(1, os.cpu_count() // 2),
-        pin_memory=torch.cuda.is_available(),
-        persistent_workers=True if os.name != "nt" else False,
+    ])
     )
 
-train_loader = make_loader(train_ds, shuffle=True)
-test_loader  = make_loader(test_ds,  shuffle=False)
+    loader = DataLoader(dataset, batch_size=64, num_workers=0, shuffle=False)
 
-# Example usage
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print(f"Train batches: {len(train_loader)}, Test batches: {len(test_loader)}")
-for images, labels in train_loader:
-    images, labels = images.to(device), labels.to(device)
-    # ... forward pass ...
-    break
+    mean = 0.0
+    sq_mean = 0.0
+    num_batches = 0
+
+    for i, (imgs, _) in enumerate(loader):
+        imgs = imgs.view(imgs.size(0), -1)   # flatten
+        mean += imgs.mean(1).sum()
+        sq_mean += (imgs ** 2).mean(1).sum()
+        num_batches += imgs.size(0)
+        if i // 1000 == 0:
+            print(f"done :", i)
+
+    mean = mean / num_batches
+    std = (sq_mean / num_batches - mean ** 2) ** 0.5
+
+    print(f"Dataset mean: {mean.item():.6f}, std: {std.item():.6f}")
+
+def create_dataloaders(img_size, batch_size):
+
+    train_tfms = transforms.Compose([
+        transforms.Grayscale(num_output_channels=1),
+        transforms.Resize((img_size, img_size)),
+        transforms.RandomHorizontalFlip(0.5),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=(MEAN,), std=(STD,)),
+    ])
+
+    test_tfms = transforms.Compose([
+        transforms.Grayscale(num_output_channels=1),
+        transforms.Resize((img_size, img_size)),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=(MEAN,), std=(STD,)),
+    ])
+
+    train_ds = datasets.ImageFolder(DATA_ROOT/"train", transform=train_tfms)
+    test_ds  = datasets.ImageFolder(DATA_ROOT/"test",  transform=test_tfms)
+
+    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True,
+                            num_workers=4,
+                            pin_memory=torch.cuda.is_available(),
+                            persistent_workers=True)
+    test_loader  = DataLoader(test_ds, batch_size=batch_size, shuffle=False,
+                            num_workers=4,
+                            pin_memory=torch.cuda.is_available(),
+                            persistent_workers=True)
+    
+    return train_loader, test_loader, train_ds.classes
+
+if __name__ == "__main__":
+    calculate_mean_std()
