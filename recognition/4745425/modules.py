@@ -129,3 +129,22 @@ class ConvNeXt(nn.Module):
         x = self.forward_features(x)
         x = self.head(x)
         return x
+    
+
+class ModelEMA:
+    def __init__(self, model, decay=0.9999, device=None):
+        self.ema = type(model)(**{k: v for k, v in model.__dict__.get('_init_args', {}).items()}) if hasattr(model, '_init_args') else None
+        self.ema = torch.nn.Module() if self.ema is None else self.ema
+        self.ema.load_state_dict(model.state_dict())
+        self.ema.to(next(model.parameters()).device)
+        self.decay = decay
+        for p in self.ema.parameters():
+            p.requires_grad_(False)
+
+    @torch.no_grad()
+    def update(self, model):
+        d = self.decay
+        msd = model.state_dict()
+        for k, v in self.ema.state_dict().items():
+            if k in msd:
+                v.copy_(v * d + msd[k] * (1.0 - d))
