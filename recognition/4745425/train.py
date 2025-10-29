@@ -9,13 +9,19 @@ from sklearn.metrics import roc_auc_score, f1_score
 import time
 
 # Config
-IMG_SIZE = 224
-BATCH_SIZE = 96
-WARMUP = 5
-EPOCHS = 50
-LR = 1e-3
-WEIGHT_DECAY = 1e-3
-SEED = 42
+IMG_SIZE        = 224
+BATCH_SIZE      = 64
+EPOCHS          = 60
+WARMUP          = 5
+LR              = 1e-3
+WEIGHT_DECAY    = 5e-2
+DROP_PATH_RATE  = 0.3
+HEAD_DROPOUT    = 0.5
+LABEL_SMOOTH    = 0.05
+GRAD_CLIP       = 1.0
+EARLY_STOP_PATIENCE = 10
+AUC_STOP_TARGET = 0.80
+
 
 w0 = 10400
 w1 = 11120
@@ -28,7 +34,7 @@ def forward_step(model: nn.Module, imgs, labels, criterion: nn.Module):
     correct = (preds == labels).sum()
     return loss, correct, preds, outputs
 
-def train_epoch(model, loader, criterion, optimizer, scaler, device, grad_clip=None):
+def train_epoch(model, loader, criterion, optimizer: torch.optim.AdamW, scaler, device, grad_clip=None):
     model.train()
     running_loss = torch.zeros((), device=device)
     correct = torch.zeros((), device=device, dtype=torch.long)
@@ -106,19 +112,28 @@ def eval_epoch(model, loader, criterion, device):
 def main():
 
     torch.backends.cudnn.benchmark = True
-    torch.manual_seed(SEED)
-    torch.cuda.manual_seed_all(SEED)
+    torch.manual_seed(42)
+    torch.cuda.manual_seed_all(42)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     train_dl, test_dl, classes, eval_dl = create_dataloaders(IMG_SIZE, BATCH_SIZE)
-    print("created dataloaders")
-    model = ConvNeXt(in_chans=1, num_classes=2, drop_path_rate=0.2).to(device)
-    print("created model")
+    return 1
 
-    model.head = nn.Sequential(nn.Dropout(p=0.3), *model.head)
+    class_counts = torch.zeros(2, dtype=torch.long)
+    for _, labels in train_dl:
+        for c in range(2):
+            class_counts[c] += (labels == c).sum()
+
+    class_counts = class_counts.to(torch.float32).to(device)
+    weights = (class_counts.sum() / (2.0 * class_counts)).clamp(min=1e-8)
+    print("weights: ", weights)
+    print("created dataloaders")
+    model = ConvNeXt(in_chans=1, num_classes=2, drop_path_rate=DROP_PATH_RATE).to(device)
+    print("created model")
+    model.head = nn.Sequential(nn.Dropout(p=0.2), model.head)
     
-    weights = torch.tensor([w0, w1], device=device)
-    criterion = nn.CrossEntropyLoss(weight=weights, label_smoothing=0.05)
+    criterion = nn.CrossEntropyLoss(weight=weights, label_smoothing=LABEL_SMOOTH)
+
     optimizer = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
     
     main_epochs = EPOCHS - WARMUP
@@ -128,41 +143,59 @@ def main():
     
     scaler = torch.amp.GradScaler(enabled=torch.cuda.is_available())
 
-    best_acc, best_path = 0.0, "best_model.pt"
-    best_val_auc = 0.0
-    total = 0.0
+    best_path = "best_model.pt"
+    best_val_acc = 0.0
     best_epoch = 0
-    for ep in range(1, EPOCHS + 1):
-        ep0 = time.perf_counter()
-        train_loss, train_acc = train_epoch(model, train_dl, criterion, optimizer, scaler, device, grad_clip=1.0)
-        
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-            torch.cuda.synchronize()
-        
-        val_loss, val_acc, val_auc, val_f1 = eval_epoch(model, eval_dl, criterion, device="cuda")
-        
-        scheduler.step()
-        epoch_total = time.perf_counter() - ep0
-        total += epoch_total
-        
-        print(f"Epoch {ep:02d}/{EPOCHS} | "
-            f"train loss {train_loss:.4f} acc {train_acc:.3f} | "
-            f"val loss {val_loss:.4f} acc {val_acc:.3f} auc {val_auc:.3f} f1 {val_f1:.3f} | "
-            f"Time taken = {total:.3f} | Learning rate = {optimizer.param_groups[0]['lr']}")
+    patience = EARLY_STOP_PATIENCE
 
-        # Keep your existing "best acc" checkpoint, and optionally add "best AUC"
-        if val_auc > best_val_auc:
-            best_val_auc = val_auc
+    for ep in range(1, EPOCHS + 1):
+        start_t = time.perf_counter()
+
+        train_loss, train_acc = train_epoch(
+            model, train_dl, criterion, optimizer, scaler, device
+        )
+
+        val_loss, val_acc, val_auc, val_f1 = eval_epoch(
+            model, eval_dl, criterion, device
+        )
+
+        torch.cuda.synchronize()
+        epoch_time = time.perf_counter() - start_t
+
+        scheduler.step()
+
+        if val_acc > best_val_acc:
+            best_val_acc = val_acc
             best_epoch = ep
             torch.save(model.state_dict(), best_path)
-        elif ep - best_epoch >= 10:
+
+        print(
+            f"Epoch {ep:02d}/{EPOCHS} "
+            f"| train_loss={train_loss:.4f} acc={train_acc:.4f} "
+            f"| val_loss={val_loss:.4f} acc={val_acc:.4f} auc={val_auc:.4f} f1={val_f1:.4f} "
+            f"| time={epoch_time:.1f}s "
+            f"| lr={optimizer.param_groups[0]['lr']:.2e}"
+        )
+
+        if ep % 5 == 0 and ep > 20:
+            test_loss, test_acc, test_auc, test_f1 = eval_epoch(
+            model, test_dl, criterion, device
+        )
+            print("test accuracy", test_acc)
+            if test_acc > 0.8:
+                model.load_state_dict(torch.load(best_path))
+                break
+
+        if ep - best_epoch >= patience:
+            print(f"No val_acc improvement in {patience} epochs, stopping.")
             break
-    print(f"Done. Best val acc = {best_acc:.3f}")
-    print(f"took {total/60} min | {total/60/ep} mins per epoch")
+
+    model.load_state_dict(torch.load(best_path))
+    test_loss, test_acc, test_auc, test_f1 = eval_epoch(model, test_dl, criterion, device)
+
+    print(f"TEST | loss={test_loss:.4f} acc={test_acc:.4f} auc={test_auc:.4f} f1={test_f1:.4f}")
 
 if __name__ == "__main__":
-    # This line is harmless on other OSes and avoids edge-cases on Windows.
     import multiprocessing as mp
     mp.freeze_support()
     main()

@@ -68,8 +68,6 @@ def create_dataloaders(img_size, batch_size):
     ])
 
     train_dss = datasets.ImageFolder(DATA_ROOT/"train", transform=train_tfms)
-    count_classes(train_dss)
-    exit()
     test_ds  = datasets.ImageFolder(DATA_ROOT/"test",  transform=test_tfms)
 
     val_frac = 0.1
@@ -92,6 +90,16 @@ def create_dataloaders(img_size, batch_size):
                             num_workers=4,
                             pin_memory=torch.cuda.is_available(),
                             persistent_workers=True)
+    
+    print("TRAIN classes:", train_dss.classes)
+    print("TRAIN class_to_idx:", train_dss.class_to_idx)
+
+    print("VAL classes:", val_ds.dataset.classes)
+    print("VAL class_to_idx:", val_ds.dataset.class_to_idx)
+
+    print("TEST classes:", test_ds.classes)
+    print("TEST class_to_idx:", test_ds.class_to_idx)
+
     
     return train_loader, test_loader, train_dss.classes, eval_loader
 
