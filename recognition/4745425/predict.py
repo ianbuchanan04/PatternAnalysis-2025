@@ -4,7 +4,7 @@ from train import ConvNeXt, eval_epoch
 from dataset import create_dataloaders
 
 device = "cuda"
-LABEL_SMOOTH    = 0.05
+LABEL_SMOOTH     = 0.05
 w0 = 10400
 w1 = 11120
 
@@ -20,13 +20,13 @@ def main():
     ).to(device)
 
     # 2. Load the saved weights
-    best_path = "best_model.pt"
+    best_path = "best_model_val20.pt"
     checkpoint = torch.load(best_path, map_location=device, weights_only=False)
     model.load_state_dict(checkpoint)
 
     # 3. Run evaluation on the test set
     model.eval()
-    (test_loss, test_acc, test_auc, test_f1, test_thr, test_f1_best, test_acc_best) = eval_epoch(model, test_dl, criterion, device)
+    (test_loss, test_acc, test_auc, test_f1, test_thr, test_f1_best, test_acc_best) = eval_epoch(model, test_dl, criterion, device, thr=0.65)
 
     # 4. Print results
     print(f"TEST | loss={test_loss:.4f} acc={test_acc:.4f} auc={test_auc:.4f} f1={test_f1:.4f}")

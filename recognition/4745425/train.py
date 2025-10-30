@@ -2,7 +2,6 @@ import torch
 import json
 from torch import nn
 import torch.nn.functional as F
-from focal_loss.focal_loss import FocalLoss
 from dataset import create_dataloaders
 from modules import ConvNeXt
 from torch.optim.lr_scheduler import LinearLR, CosineAnnealingLR, SequentialLR
@@ -13,15 +12,15 @@ import matplotlib.pyplot as plt
 # Config
 IMG_SIZE        = 224
 BATCH_SIZE      = 64
-EPOCHS          = 100
+EPOCHS          = 60
 WARMUP          = 5
 LR              = 3e-4
 WEIGHT_DECAY    = 5e-2
 DROP_PATH_RATE  = 0.4
 HEAD_DROPOUT    = 0.5
-LABEL_SMOOTH    = 0.1
+LABEL_SMOOTH    = 0.05
 GRAD_CLIP       = 2.0
-EARLY_STOP_PATIENCE = 10
+EARLY_STOP_PATIENCE = 8
 
 total = 0.0
 
@@ -87,7 +86,7 @@ def predict_probs(model, imgs):
     return (probs + probs_flip) / 2.0
 
 @torch.no_grad()
-def eval_epoch(model, loader, criterion, device, thr=None, test=False, tta=False):
+def eval_epoch(model, loader, criterion, device, thr=None, tta=False):
     model.eval()
     total_loss = 0.0
     total_correct = 0
@@ -229,7 +228,7 @@ def main():
                 scheduler.step()
 
             # VALIDATION (no TTA, thr search)
-            (val_loss, val_acc_argmax, val_auc, val_f1_default, val_thr, val_f1_best, val_acc_best) = eval_epoch(model, eval_dl, criterion, device, thr=None, tta=False)
+            (val_loss, val_acc_argmax, val_auc, val_f1_default, val_thr, val_f1_best, val_acc_best) = eval_epoch(model, eval_dl, criterion, device, thr=None, tta=True)
 
             elapsed = time.time() - start
 
@@ -258,10 +257,11 @@ def main():
             })
 
             # check improvement on VAL
-            improved = val_auc > best_val_auc
-            if improved:
-                best_val_auc = val_auc
-                best_val_thr = val_thr
+            score = val_auc
+            best_acc_on_val = 0.0
+            if score > best_val_auc or val_acc_best > best_acc_on_val:
+                best_val_auc = max(best_val_auc, score)
+                best_acc_on_val = max(best_acc_on_val, val_acc_best)
                 best_epoch = ep
                 torch.save(model.state_dict(), best_path)
                 print(f"->Saved new best to {best_path} (val_auc={val_auc:.4f})")
@@ -280,7 +280,7 @@ def main():
         model.to(device)
 
         # FINAL TEST: use best val threshold, and TTA=True if you like
-        (test_loss, test_acc_argmax, test_auc, test_f1_default, _, test_f1_best, test_acc_best) = eval_epoch(model, test_dl, criterion, device, thr=best_val_thr, test=True, tta=True)
+        (test_loss, test_acc_argmax, test_auc, test_f1_default, _, test_f1_best, test_acc_best) = eval_epoch(model, test_dl, criterion, device, thr=best_val_thr, tta=True)
 
         print(
             f"[FINAL TEST] loss={test_loss:.4f} | "

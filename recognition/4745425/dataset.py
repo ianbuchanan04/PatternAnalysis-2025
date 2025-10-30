@@ -7,9 +7,8 @@ from collections import Counter
 from sklearn.model_selection import train_test_split
 
 DATA_ROOT = Path("ADNI/AD_NC")
-# Precalculated values
-MEAN = 0.1155
-STD = 0.2254
+MEAN = 0.115892
+STD = 0.225568
 
 def count_classes(ds):
     counts = Counter(ds.targets)
@@ -21,7 +20,7 @@ def count_classes(ds):
 
 def calculate_mean_std():
     dataset = datasets.ImageFolder(
-    root=r"ADNI/AD_NC/train",
+    root=r"ADNI/AD_NC",
     transform=transforms.Compose([
         transforms.Grayscale(num_output_channels=1),
         transforms.ToTensor(),
@@ -47,15 +46,21 @@ def calculate_mean_std():
 
     print(f"Dataset mean: {mean.item():.6f}, std: {std.item():.6f}")
 
+def normalize_per_image(tensor):
+    mean = tensor.mean()
+    std = tensor.std()
+    return (tensor - mean) / (std + 1e-6)
+
 def create_dataloaders(img_size: int, batch_size: int, val_frac: float = 0.2):
     # --- transforms ---
     train_tfms = transforms.Compose([
         transforms.Grayscale(num_output_channels=1),
         transforms.RandomResizedCrop(img_size, scale=(0.8, 1.0)),
         transforms.RandomHorizontalFlip(0.5),
-        transforms.RandomRotation(degrees=10, fill=0),
+        transforms.RandomAutocontrast(p=0.3),
+        transforms.RandomEqualize(p=0.2),
         transforms.ToTensor(),
-        transforms.Normalize(mean=(MEAN,), std=(STD,)),
+        transforms.Lambda(normalize_per_image),
     ])
 
     eval_tfms = transforms.Compose([
@@ -63,7 +68,7 @@ def create_dataloaders(img_size: int, batch_size: int, val_frac: float = 0.2):
         transforms.Resize(int(round(img_size / 0.875))),
         transforms.CenterCrop(img_size),
         transforms.ToTensor(),
-        transforms.Normalize(mean=(MEAN,), std=(STD,)),
+        transforms.Lambda(normalize_per_image),
     ])
 
     # --- base dataset (no transform) just to get samples/targets for a stratified split ---
@@ -106,5 +111,5 @@ def create_dataloaders(img_size: int, batch_size: int, val_frac: float = 0.2):
     return train_loader, eval_loader, test_loader, train_full.classes
 
 if __name__ == "__main__":
-    # calculate_mean_std()
-    create_dataloaders(224, 96)
+    calculate_mean_std()
+    # create_dataloaders(224, 96)

@@ -102,8 +102,7 @@ class ConvNeXt(nn.Module):
         for i in range(4):
             stage = nn.Sequential(
                 *[Block(dim=dims[i], drop_path=dp_rates[cur + j], 
-                layer_scale_init_value=layer_scale_init_value) for j in range(depths[i])],
-                nn.Dropout(0.3)
+                layer_scale_init_value=layer_scale_init_value) for j in range(depths[i])]
             )
             self.stages.append(stage)
             cur += depths[i]
