@@ -5,7 +5,7 @@ import torch.nn.functional as F
 from focal_loss.focal_loss import FocalLoss
 from dataset import create_dataloaders
 from modules import ConvNeXt
-from torch.optim.lr_scheduler import LinearLR, CosineAnnealingLR, SequentialLR, ReduceLROnPlateau
+from torch.optim.lr_scheduler import LinearLR, CosineAnnealingLR, SequentialLR
 from sklearn.metrics import roc_auc_score, f1_score
 import time
 import matplotlib.pyplot as plt
@@ -21,7 +21,7 @@ DROP_PATH_RATE  = 0.4
 HEAD_DROPOUT    = 0.5
 LABEL_SMOOTH    = 0.1
 GRAD_CLIP       = 2.0
-EARLY_STOP_PATIENCE = 8
+EARLY_STOP_PATIENCE = 5
 
 total = 0.0
 

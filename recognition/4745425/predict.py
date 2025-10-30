@@ -26,7 +26,7 @@ def main():
 
     # 3. Run evaluation on the test set
     model.eval()
-    test_loss, test_acc, test_auc, test_f1 = eval_epoch(model, test_dl, criterion, device)
+    (test_loss, test_acc, test_auc, test_f1, test_thr, test_f1_best, test_acc_best) = eval_epoch(model, test_dl, criterion, device)
 
     # 4. Print results
     print(f"TEST | loss={test_loss:.4f} acc={test_acc:.4f} auc={test_auc:.4f} f1={test_f1:.4f}")
