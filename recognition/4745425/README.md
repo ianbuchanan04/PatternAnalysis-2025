@@ -81,4 +81,4 @@ From the loss history (`history.json`), validation AUC steadily improved from **
 ## Example Output
 ```bash
 [FINAL TEST] loss=0.3938 | acc_argmax=0.8783 | acc@bestValThr=0.8887 |
-auc=0.9525 | f1_default=0.8849 | f1@bestValThr=0.8918 | thr_used=0.62
+auc=0.9525 | f1_default=0.8849 | f1@bestValThr=0.8918 | thr_used=0.62    
