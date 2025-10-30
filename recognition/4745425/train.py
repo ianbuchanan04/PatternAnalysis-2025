@@ -1,70 +1,77 @@
 import torch
+import json
 from torch import nn
 import torch.nn.functional as F
+from focal_loss.focal_loss import FocalLoss
 from dataset import create_dataloaders
 from modules import ConvNeXt
-from torch.optim.lr_scheduler import LinearLR, CosineAnnealingLR, SequentialLR
-from sklearn.metrics import roc_auc_score, f1_score, accuracy_score 
+from torch.optim.lr_scheduler import LinearLR, CosineAnnealingLR, SequentialLR, ReduceLROnPlateau
+from sklearn.metrics import roc_auc_score, f1_score
 import time
 import matplotlib.pyplot as plt
 
 # Config
 IMG_SIZE        = 224
 BATCH_SIZE      = 64
-EPOCHS          = 60 
+EPOCHS          = 100
 WARMUP          = 5
 LR              = 3e-4
-WEIGHT_DECAY    = 1e-2
-DROP_PATH_RATE  = 0.3
+WEIGHT_DECAY    = 5e-2
+DROP_PATH_RATE  = 0.4
 HEAD_DROPOUT    = 0.5
-LABEL_SMOOTH    = 0.05
-GRAD_CLIP       = 1.0
-EARLY_STOP_PATIENCE = 20
+LABEL_SMOOTH    = 0.1
+GRAD_CLIP       = 2.0
+EARLY_STOP_PATIENCE = 8
 
-w0 = 10400
-w1 = 11120
 total = 0.0
 
-def forward_step(model: nn.Module, imgs, labels, criterion: nn.Module):
-    outputs = model(imgs)
-    loss = criterion(outputs, labels)
-    preds = outputs.argmax(dim=1)
-    correct = (preds == labels).sum()
-    return loss, correct, preds, outputs
+history = []
 
-def train_epoch(model, loader, criterion, optimizer: torch.optim.AdamW, scaler, device, grad_clip=None):
+def forward_step(model: nn.Module, imgs, labels, criterion: nn.Module):
+    logits = model(imgs)
+    probs = F.softmax(logits, dim=1)
+    loss = criterion(logits, labels)
+    preds = logits.argmax(dim=1)
+    correct = (preds == labels).sum()
+    return loss, correct, preds, probs, logits
+
+def train_epoch(model, loader, criterion, optimizer, device, scaler=None):
     model.train()
-    running_loss = torch.zeros((), device=device)
-    correct = torch.zeros((), device=device, dtype=torch.long)
-    total = 0
+    total_loss = 0.0
+    total_correct = 0
+    total_samples = 0
 
     for imgs, labels in loader:
-        # t0 = time.perf_counter()
-        imgs   = imgs.to(device, non_blocking=True)
+        imgs = imgs.to(device, non_blocking=True)
         labels = labels.to(device, non_blocking=True)
+        bs = labels.size(0)
 
         optimizer.zero_grad(set_to_none=True)
-        with torch.amp.autocast(device_type="cuda", enabled=torch.cuda.is_available()):
-            loss, batch_correct, _, _ = forward_step(model, imgs, labels, criterion)
 
-        scaler.scale(loss).backward()
-        if grad_clip is not None:
-            scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+        if scaler is not None:
+            with torch.amp.autocast("cuda"):
+                logits = model(imgs)
+                loss = criterion(logits, labels)
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            logits = model(imgs)
+            loss = criterion(logits, labels)
+            loss.backward()
+            optimizer.step()
 
-        scaler.step(optimizer)
-        scaler.update()
+        preds = logits.argmax(dim=1)
+        correct = (preds == labels).sum()
 
-        running_loss += loss.detach() * imgs.size(0)
-        correct += batch_correct
-        total += labels.size(0)
+        total_loss += loss.item() * bs
+        total_correct += correct.item()
+        total_samples += bs
 
-        del imgs, labels, loss, batch_correct
-        # print(f"{total / BATCH_SIZE}/{21520/BATCH_SIZE} | {time.perf_counter() - t0}s")
+    avg_loss = total_loss / total_samples
+    avg_acc = total_correct / total_samples
+    return avg_loss, avg_acc
 
-    avg_loss = (running_loss / total).item()
-    acc = (correct.float() / total).item()
-    return avg_loss, acc
 
 @torch.no_grad()
 def predict_probs(model, imgs):
@@ -79,82 +86,83 @@ def predict_probs(model, imgs):
     # average original + flipped predictions
     return (probs + probs_flip) / 2.0
 
-def eval_epoch(model, loader, criterion, device, thr=None, test=False):
-    """
-    Evaluates a model.
-    - Uses flip-TTA (predict_probs) for metrics (AUC/F1/thresholded acc).
-    - Computes loss on raw logits (no TTA) to match training criterion.
-    Returns:
-      if not test:
-        (avg_loss, acc_argmax, auc, f1_at_0p5_or_thr, best_thr, best_f1, best_acc_at_best_thr)
-      else:
-        (avg_loss, acc_argmax, auc, f1_at_0p5_or_thr)
-    """
+@torch.no_grad()
+def eval_epoch(model, loader, criterion, device, thr=None, test=False, tta=False):
     model.eval()
-    running_loss, n = 0.0, 0
+    total_loss = 0.0
+    total_correct = 0
+    total_samples = 0
 
-    all_logits = []
-    all_probs  = []
     all_labels = []
+    all_probs = []
 
-    with torch.no_grad():
-        for imgs, labels in loader:
-            imgs   = imgs.to(device, non_blocking=True)
-            labels = labels.to(device, non_blocking=True)
+    for imgs, labels in loader:
+        imgs = imgs.to(device, non_blocking=True)
+        labels = labels.to(device, non_blocking=True)
 
-            # loss on logits (no TTA)
-            logits = model(imgs)
-            loss = criterion(logits, labels)
+        # base forward
+        logits = model(imgs)
+        base_probs = F.softmax(logits, dim=1)
+        loss = criterion(logits, labels)
 
-            # probs for metrics with flip-TTA
-            probs_tta = predict_probs(model, imgs)  # shape [B, 2]
+        # optional TTA (horizontal flip like your predict_probs)
+        if tta:
+            # do the simple 2-view TTA
+            flipped = torch.flip(imgs, dims=[3])
+            logits_flip = model(flipped)
+            probs_flip = F.softmax(logits_flip, dim=1)
+            probs_used = 0.5 * (base_probs + probs_flip)
+        else:
+            probs_used = base_probs
 
-            running_loss += loss.item() * imgs.size(0)
-            n += imgs.size(0)
+        preds = probs_used.argmax(dim=1)
+        correct = (preds == labels).sum()
 
-            all_logits.append(logits.detach().cpu())
-            all_probs.append(probs_tta.detach().cpu())
-            all_labels.append(labels.detach().cpu())
+        bs = labels.size(0)
+        total_samples += bs
+        total_correct += correct.item()
+        total_loss += loss.item() * bs
 
-    # aggregate
-    logits_cat = torch.cat(all_logits, dim=0)
-    probs_cat  = torch.cat(all_probs,  dim=0).numpy()
-    labels_cat = torch.cat(all_labels, dim=0).numpy()
+        all_labels.append(labels.cpu())
+        all_probs.append(probs_used.detach().cpu())
 
-    # accuracy with argmax (from logits, consistent with training printouts)
-    preds_argmax = logits_cat.argmax(dim=1).numpy()
-    acc_argmax = accuracy_score(labels_cat, preds_argmax)
+    # stack
+    all_labels = torch.cat(all_labels, dim=0)
+    all_probs = torch.cat(all_probs, dim=0)
+    all_scores = all_probs[:, 1]
 
-    # base metrics from probs
-    pos_probs = probs_cat[:, 1]
+    # default argmax metrics
+    avg_loss = total_loss / total_samples
+    acc_argmax = total_correct / total_samples
 
-    # AUC can fail if only one class present; guard it
     try:
-        auc = roc_auc_score(labels_cat, pos_probs)
-    except ValueError:
-        auc = float("nan")
+        auc = roc_auc_score(all_labels.numpy(), all_scores.numpy())
+    except Exception:
+        auc = 0.0
 
-    # F1 at default 0.5 threshold (or at provided thr if given)
-    default_thr = 0.5 if thr is None else float(thr)
-    bin_preds_default = (pos_probs >= default_thr).astype("int64")
-    f1_default = f1_score(labels_cat, bin_preds_default)
+    preds_argmax = all_probs.argmax(dim=1).numpy()
+    f1_default = f1_score(all_labels.numpy(), preds_argmax, zero_division=0)
 
-    avg_loss = running_loss / max(1, n)
+    best_thr = 0.5 if thr is None else thr
+    best_f1 = f1_default
+    best_acc = acc_argmax
 
-    # If we're doing validation, sweep thresholds to find best F1 (and report its acc)
-    if not test:
-        best_f1, best_thr, best_acc = -1.0, 0.5, acc_argmax
-        # search from 0.05..0.95 inclusive
+    if thr is None:
         for t in [i / 100 for i in range(5, 96)]:
-            bp = (pos_probs >= t).astype("int64")
-            f1 = f1_score(labels_cat, bp)
-            if f1 > best_f1:
-                best_f1 = f1
+            bin_preds = (all_scores.numpy() >= t).astype("int32")
+            f1_t = f1_score(all_labels.numpy(), bin_preds, zero_division=0)
+            acc_t = (bin_preds == all_labels.numpy()).mean()
+            if f1_t > best_f1:
+                best_f1 = f1_t
                 best_thr = t
-                best_acc = accuracy_score(labels_cat, bp)
-        return avg_loss, acc_argmax, auc, f1_default, best_thr, best_f1, best_acc
-    else:      
-        return avg_loss, acc_argmax, auc, f1_default
+                best_acc = acc_t
+    else:
+        bin_preds = (all_scores.numpy() >= thr).astype("int32")
+        best_f1 = f1_score(all_labels.numpy(), bin_preds, zero_division=0)
+        best_acc = (bin_preds == all_labels.numpy()).mean()
+        best_thr = thr
+
+    return (avg_loss, acc_argmax, auc, f1_default, best_thr, best_f1, best_acc,)
 
 def plot_losses(train_losses, val_losses):
     plt.plot(train_losses, label='Train Loss')
@@ -168,20 +176,17 @@ def plot_losses(train_losses, val_losses):
 def main():
 
     torch.backends.cudnn.benchmark = True
-    torch.manual_seed(42)
-    torch.cuda.manual_seed_all(42)
+    torch.manual_seed(2409)
+    torch.cuda.manual_seed_all(2409)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    train_dl, test_dl, _, eval_dl = create_dataloaders(IMG_SIZE, BATCH_SIZE)
+    train_dl, eval_dl , test_dl, classes = create_dataloaders(IMG_SIZE, BATCH_SIZE)
 
     class_counts = torch.zeros(2, dtype=torch.long)
     for _, labels in train_dl:
         for c in range(2):
             class_counts[c] += (labels == c).sum()
 
-    class_counts = class_counts.to(torch.float32).to(device)
-    weights = (class_counts.sum() / (2.0 * class_counts)).clamp(min=1e-8)
-    print("weights: ", weights)
     print("created dataloaders")
     # ConvNext Tiny
     model = ConvNeXt(in_chans=1, 
@@ -191,6 +196,7 @@ def main():
     print("created model")
     model.head = nn.Sequential(nn.Dropout(p=HEAD_DROPOUT), model.head)
     
+    weights = torch.tensor([1.0346, 0.9676], device=device)
     criterion = nn.CrossEntropyLoss(weight=weights, label_smoothing=LABEL_SMOOTH)
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
@@ -198,58 +204,92 @@ def main():
     main_epochs = EPOCHS - WARMUP
     sched_warmup = LinearLR(optimizer, start_factor=0.1, total_iters=WARMUP)
     sched_cosine = CosineAnnealingLR(optimizer, T_max=main_epochs)
-    scheduler = SequentialLR(optimizer, schedulers=[sched_warmup, sched_cosine], milestones=[WARMUP])    
+    scheduler = SequentialLR(optimizer, schedulers=[sched_warmup, sched_cosine], milestones=[WARMUP])
     
     scaler = torch.amp.GradScaler(enabled=torch.cuda.is_available())
 
-    best_path = "best_model.pt"
     best_val_auc = 0.0
+    best_val_thr = 0.5
     best_epoch = 0
-    patience = EARLY_STOP_PATIENCE
-    train_losses, val_losses = [], []
+    patience = EARLY_STOP_PATIENCE  # keep your const
+    best_path = "best_model_val20.pt"
+
+    history = []
 
     for ep in range(1, EPOCHS + 1):
-        start_t = time.perf_counter()
+        start = time.time()
 
         train_loss, train_acc = train_epoch(
-            model, train_dl, criterion, optimizer, scaler, device
+            model, train_dl, criterion, optimizer, device, scaler
         )
-        train_losses.append(train_loss)
 
-        val_loss, val_acc, val_auc, val_f1_default, val_thr, val_f1_best, val_acc_best = eval_epoch(
-            model, eval_dl, criterion, device
-        )
-        val_losses.append(val_loss)
+        # step schedulers that go every epoch (warmup+cosine)
+        if scheduler is not None:
+            scheduler.step()
 
-        torch.cuda.synchronize()
-        epoch_time = time.perf_counter() - start_t
+        # VALIDATION (no TTA, thr search)
+        (val_loss, val_acc_argmax, val_auc, val_f1_default, val_thr, val_f1_best, val_acc_best) = eval_epoch(model, eval_dl, criterion, device, thr=None, tta=False)
 
-        scheduler.step()   
+        elapsed = time.time() - start
 
         print(
-            f"Epoch {ep:02d}/{EPOCHS} "
-            f"| train_loss={train_loss:.4f} acc={train_acc:.4f} "
-            f"| val_loss={val_loss:.4f} acc={val_acc:.4f} auc={val_auc:.4f} f1={val_f1_default:.4f} bestF1={val_f1_best:.4f} @thr={val_thr:.2f} bestAcc={val_acc_best:.4f} "
-            f"| time={epoch_time:.1f}s "
-            f"| lr={optimizer.param_groups[0]['lr']:.2e}"
+            f"Epoch {ep:02d}/{EPOCHS} | "
+            f"train_loss={train_loss:.4f} acc={train_acc:.4f} | "
+            f"val_loss={val_loss:.4f} acc={val_acc_argmax:.4f} "
+            f"auc={val_auc:.4f} f1={val_f1_default:.4f} "
+            f"bestF1={val_f1_best:.4f} @thr={val_thr:.2f} | "
+            f"time={elapsed:.1f}s | lr={optimizer.param_groups[0]['lr']:.2e}"
         )
 
-        if ep > 10:
-            avg_loss, acc_argmax, auc, f1_default = eval_epoch(
-                model, test_dl, criterion, device, test=True, thr=val_thr
-            )
-            print(f"TEST | thr={val_thr:.2f} loss={avg_loss:.4f} acc={acc_argmax:.4f} auc={auc:.4f} f1={f1_default:.4f}")
+        # log for report
+        history.append({
+            "epoch": ep,
+            "train_loss": train_loss,
+            "train_acc": train_acc,
+            "val_loss": val_loss,
+            "val_acc_argmax": val_acc_argmax,
+            "val_auc": val_auc,
+            "val_f1_default": val_f1_default,
+            "val_thr": val_thr,
+            "val_f1_best": val_f1_best,
+            "val_acc_best": val_acc_best,
+            "lr": optimizer.param_groups[0]["lr"],
+        })
+
+        # check improvement on VAL
+        improved = val_auc > best_val_auc
+        if improved:
+            best_val_auc = val_auc
+            best_val_thr = val_thr
             best_epoch = ep
             torch.save(model.state_dict(), best_path)
-            if acc_argmax > 0.8:
-                model.load_state_dict(torch.load(best_path))
-                break
+            print(f"->Saved new best to {best_path} (val_auc={val_auc:.4f})")
 
+        # early stop
         if ep - best_epoch >= patience:
-            print(f"No val_acc improvement in {patience} epochs, stopping.")
+            print(f"Early stopping at epoch {ep} (no val improvement for {patience} epochs)")
             break
 
-    plot_losses(train_losses, val_losses)    
+    # save history
+    with open("history.json", "w") as f:
+        json.dump(history, f, indent=2)
+
+    print("Training done. Loading best model and running FINAL TEST...")
+    model.load_state_dict(torch.load(best_path, map_location=device))
+    model.to(device)
+
+    # FINAL TEST: use best val threshold, and TTA=True if you like
+    (test_loss, test_acc_argmax, test_auc, test_f1_default, _, test_f1_best, test_acc_best) = eval_epoch(model, test_dl, criterion, device, thr=best_val_thr, test=True, tta=True)
+
+    print(
+        f"[FINAL TEST] loss={test_loss:.4f} | "
+        f"acc_argmax={test_acc_argmax:.4f} | "
+        f"acc@bestValThr={test_acc_best:.4f} | "
+        f"auc={test_auc:.4f} | "
+        f"f1_default={test_f1_default:.4f} | "
+        f"f1@bestValThr={test_f1_best:.4f} | "
+        f"thr_used={best_val_thr:.2f}"
+    )
 
 if __name__ == "__main__":
     import multiprocessing as mp

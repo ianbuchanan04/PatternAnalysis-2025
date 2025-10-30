@@ -102,7 +102,8 @@ class ConvNeXt(nn.Module):
         for i in range(4):
             stage = nn.Sequential(
                 *[Block(dim=dims[i], drop_path=dp_rates[cur + j], 
-                layer_scale_init_value=layer_scale_init_value) for j in range(depths[i])]
+                layer_scale_init_value=layer_scale_init_value) for j in range(depths[i])],
+                nn.Dropout(0.3)
             )
             self.stages.append(stage)
             cur += depths[i]
@@ -123,10 +124,10 @@ class ConvNeXt(nn.Module):
         for i in range(4):
             x = self.downsample_layers[i](x)
             x = self.stages[i](x)
-        return self.norm(x.mean([-2, -1])) # global average pooling, (N, C, H, W) -> (N, C)
-
+        return self.norm(x.mean([-2, -1]))
+    
     def forward(self, x):
         x = self.forward_features(x)
         x = self.head(x)
         return x
-    
+      

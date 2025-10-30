@@ -4,7 +4,7 @@ import torch
 from torch.utils.data import DataLoader, Subset
 from torchvision import datasets, transforms
 from collections import Counter
-
+from sklearn.model_selection import train_test_split
 
 DATA_ROOT = Path("ADNI/AD_NC")
 # Precalculated values
@@ -47,22 +47,20 @@ def calculate_mean_std():
 
     print(f"Dataset mean: {mean.item():.6f}, std: {std.item():.6f}")
 
-def create_dataloaders(img_size: int, batch_size: int, val_frac: float = 0.10):
+def create_dataloaders(img_size: int, batch_size: int, val_frac: float = 0.15):
     # --- transforms ---
     train_tfms = transforms.Compose([
         transforms.Grayscale(num_output_channels=1),
-        transforms.RandomResizedCrop(img_size, scale=(0.6, 1.0), ratio=(0.9, 1.1)),
+        transforms.RandomResizedCrop(img_size, scale=(0.8, 1.0)),
         transforms.RandomHorizontalFlip(0.5),
         transforms.RandomRotation(degrees=10, fill=0),
-        transforms.RandomApply([transforms.GaussianBlur(kernel_size=5)], p=0.2),
-        # optional: mild intensity jitter to help cross-site generalization
-        transforms.RandomApply([transforms.ColorJitter(brightness=0.15, contrast=0.15)], p=0.5),
         transforms.ToTensor(),
         transforms.Normalize(mean=(MEAN,), std=(STD,)),
     ])
+    
     eval_tfms = transforms.Compose([
         transforms.Grayscale(num_output_channels=1),
-        transforms.Resize(int(round(img_size / 0.875))),  # ~1.14x for 224->256 then center crop
+        transforms.Resize(int(round(img_size / 0.875))),
         transforms.CenterCrop(img_size),
         transforms.ToTensor(),
         transforms.Normalize(mean=(MEAN,), std=(STD,)),
@@ -71,9 +69,13 @@ def create_dataloaders(img_size: int, batch_size: int, val_frac: float = 0.10):
     # --- base dataset (no transform) just to get samples/targets for a stratified split ---
     base_train = datasets.ImageFolder(DATA_ROOT / "train", transform=None)
     targets = np.array(base_train.targets)
-    n_total = len(base_train)
-    n_val = int(round(n_total * val_frac))
-    n_train = n_total - n_val
+
+    train_idx, val_idx = train_test_split(
+        np.arange(len(targets)),
+        test_size=val_frac,
+        stratify=targets,
+        random_state=42,
+    )
 
     # stratified split
     rng = np.random.default_rng(42)
@@ -109,7 +111,7 @@ def create_dataloaders(img_size: int, batch_size: int, val_frac: float = 0.10):
     eval_loader  = DataLoader(val_ds,   batch_size=batch_size, shuffle=False, **common_kwargs)
     test_loader  = DataLoader(test_ds,  batch_size=batch_size, shuffle=False, **common_kwargs)
 
-    return train_loader, test_loader, train_full.classes, eval_loader
+    return train_loader, eval_loader, test_loader, train_full.classes
 
 if __name__ == "__main__":
     # calculate_mean_std()
