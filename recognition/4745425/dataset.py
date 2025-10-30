@@ -57,7 +57,7 @@ def create_dataloaders(img_size: int, batch_size: int, val_frac: float = 0.15):
         transforms.ToTensor(),
         transforms.Normalize(mean=(MEAN,), std=(STD,)),
     ])
-    
+
     eval_tfms = transforms.Compose([
         transforms.Grayscale(num_output_channels=1),
         transforms.Resize(int(round(img_size / 0.875))),
@@ -86,14 +86,6 @@ def create_dataloaders(img_size: int, batch_size: int, val_frac: float = 0.15):
         n_cls_val = int(round(len(cls_idx) * val_frac))
         val_idx.extend(cls_idx[:n_cls_val].tolist())
         train_idx.extend(cls_idx[n_cls_val:].tolist())
-
-    # in case rounding pushed sizes off by 1:
-    if len(val_idx) != n_val:
-        # adjust by moving a few from train -> val
-        diff = n_val - len(val_idx)
-        extra = train_idx[:diff]
-        val_idx.extend(extra)
-        train_idx = train_idx[diff:]
 
     # --- two separate ImageFolders with their own transforms ---
     train_full = datasets.ImageFolder(DATA_ROOT / "train", transform=train_tfms)
