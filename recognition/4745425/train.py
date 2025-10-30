@@ -172,7 +172,7 @@ def plot_losses(train_losses, val_losses):
     plt.title('Training/Validation Loss')
     plt.show()
 
-def main():
+def train():
     
     try:
         torch.backends.cudnn.benchmark = True
@@ -259,12 +259,15 @@ def main():
             # check improvement on VAL
             score = val_auc
             best_acc_on_val = 0.0
+            i = 0
             if score > best_val_auc or val_acc_best > best_acc_on_val:
                 best_val_auc = max(best_val_auc, score)
                 best_acc_on_val = max(best_acc_on_val, val_acc_best)
+                best_val_thr = val_thr              # <— keep the best threshold
                 best_epoch = ep
-                torch.save(model.state_dict(), best_path)
-                print(f"->Saved new best to {best_path} (val_auc={val_auc:.4f})")
+                name = best_path + str(i)
+                torch.save({"state_dict": model.state_dict(),
+                            "best_val_thr": best_val_thr}, best_path)
 
             # early stop
             if ep - best_epoch >= patience:
@@ -276,24 +279,28 @@ def main():
             json.dump(history, f, indent=2)
 
         print("Training done. Loading best model and running FINAL TEST...")
-        model.load_state_dict(torch.load(best_path, map_location=device))
-        model.to(device)
+        ckpt = torch.load(best_path, map_location=device)
+        model.load_state_dict(ckpt["state_dict"])
+        best_val_thr = ckpt.get("best_val_thr", 0.5)
 
-        # FINAL TEST: use best val threshold, and TTA=True if you like
-        (test_loss, test_acc_argmax, test_auc, test_f1_default, _, test_f1_best, test_acc_best) = eval_epoch(model, test_dl, criterion, device, thr=best_val_thr, tta=True)
+        test_loss, acc_argmax, test_auc, f1_default, _, f1_best, acc_best = \
+            eval_epoch(model, test_dl, criterion, device, thr=best_val_thr, tta=True)
 
         print(
             f"[FINAL TEST] loss={test_loss:.4f} | "
-            f"acc_argmax={test_acc_argmax:.4f} | "
-            f"acc@bestValThr={test_acc_best:.4f} | "
+            f"acc_argmax={acc_argmax:.4f} | "
+            f"acc@bestValThr={acc_best:.4f} | "
             f"auc={test_auc:.4f} | "
-            f"f1_default={test_f1_default:.4f} | "
-            f"f1@bestValThr={test_f1_best:.4f} | "
+            f"f1_default={f1_default:.4f} | "
+            f"f1@bestValThr={f1_best:.4f} | "
             f"thr_used={best_val_thr:.2f}"
         )
     except:
-        with open("history.json", "w") as f:
+        with open("history_1.json", "w") as f:
             json.dump(history, f, indent=2) 
+
+def main():
+    train()
 
 if __name__ == "__main__":
     import multiprocessing as mp
