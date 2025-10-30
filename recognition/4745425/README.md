@@ -63,9 +63,9 @@ Dataset split:
 | Dataset | Accuracy | AUC | F1 | Best Threshold |
 |----------|-----------|-----|----|----------------|
 | Validation | 0.86 | 0.95 | 0.88 | 0.54 |
-| Test | 0.88 | 0.95 | 0.89 | 0.62 |
+| Test | 0.5304 | 0.5864 | 0.6720 | 0.62 |
 
-The model achieved a **test AUC of 0.95** and **F1-score of 0.89**, satisfying the course requirement of ≥0.8 accuracy for Hard Difficulty tasks.
+The model achieved a **test AUC of 0.5864** and **F1-score of 0.6720**, not meeting the courses requirements.
 
 ---
 
