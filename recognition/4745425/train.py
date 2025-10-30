@@ -21,7 +21,7 @@ DROP_PATH_RATE  = 0.4
 HEAD_DROPOUT    = 0.5
 LABEL_SMOOTH    = 0.1
 GRAD_CLIP       = 2.0
-EARLY_STOP_PATIENCE = 5
+EARLY_STOP_PATIENCE = 10
 
 total = 0.0
 
@@ -174,122 +174,126 @@ def plot_losses(train_losses, val_losses):
     plt.show()
 
 def main():
-
-    torch.backends.cudnn.benchmark = True
-    torch.manual_seed(2409)
-    torch.cuda.manual_seed_all(2409)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    train_dl, eval_dl , test_dl, classes = create_dataloaders(IMG_SIZE, BATCH_SIZE)
-
-    class_counts = torch.zeros(2, dtype=torch.long)
-    for _, labels in train_dl:
-        for c in range(2):
-            class_counts[c] += (labels == c).sum()
-
-    print("created dataloaders")
-    # ConvNext Tiny
-    model = ConvNeXt(in_chans=1, 
-                     num_classes=2, 
-                     drop_path_rate=DROP_PATH_RATE,
-                     depths=[3, 3, 9, 3]).to(device)
-    print("created model")
-    model.head = nn.Sequential(nn.Dropout(p=HEAD_DROPOUT), model.head)
     
-    weights = torch.tensor([1.0346, 0.9676], device=device)
-    criterion = nn.CrossEntropyLoss(weight=weights, label_smoothing=LABEL_SMOOTH)
+    try:
+        torch.backends.cudnn.benchmark = True
+        torch.manual_seed(2409)
+        torch.cuda.manual_seed_all(2409)
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
-    
-    main_epochs = EPOCHS - WARMUP
-    sched_warmup = LinearLR(optimizer, start_factor=0.1, total_iters=WARMUP)
-    sched_cosine = CosineAnnealingLR(optimizer, T_max=main_epochs)
-    scheduler = SequentialLR(optimizer, schedulers=[sched_warmup, sched_cosine], milestones=[WARMUP])
-    
-    scaler = torch.amp.GradScaler(enabled=torch.cuda.is_available())
+        train_dl, eval_dl , test_dl, classes = create_dataloaders(IMG_SIZE, BATCH_SIZE)
 
-    best_val_auc = 0.0
-    best_val_thr = 0.5
-    best_epoch = 0
-    patience = EARLY_STOP_PATIENCE  # keep your const
-    best_path = "best_model_val20.pt"
+        class_counts = torch.zeros(2, dtype=torch.long)
+        for _, labels in train_dl:
+            for c in range(2):
+                class_counts[c] += (labels == c).sum()
 
-    history = []
+        print("created dataloaders")
+        # ConvNext Tiny
+        model = ConvNeXt(in_chans=1, 
+                        num_classes=2, 
+                        drop_path_rate=DROP_PATH_RATE,
+                        depths=[3, 3, 9, 3]).to(device)
+        print("created model")
+        model.head = nn.Sequential(nn.Dropout(p=HEAD_DROPOUT), model.head)
+        
+        weights = torch.tensor([1.0346, 0.9676], device=device)
+        criterion = nn.CrossEntropyLoss(weight=weights, label_smoothing=LABEL_SMOOTH)
 
-    for ep in range(1, EPOCHS + 1):
-        start = time.time()
+        optimizer = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
+        
+        main_epochs = EPOCHS - WARMUP
+        sched_warmup = LinearLR(optimizer, start_factor=0.1, total_iters=WARMUP)
+        sched_cosine = CosineAnnealingLR(optimizer, T_max=main_epochs)
+        scheduler = SequentialLR(optimizer, schedulers=[sched_warmup, sched_cosine], milestones=[WARMUP])
+        
+        scaler = torch.amp.GradScaler(enabled=torch.cuda.is_available())
 
-        train_loss, train_acc = train_epoch(
-            model, train_dl, criterion, optimizer, device, scaler
-        )
+        best_val_auc = 0.0
+        best_val_thr = 0.5
+        best_epoch = 0
+        patience = EARLY_STOP_PATIENCE
+        best_path = "best_model_val20.pt"
 
-        # step schedulers that go every epoch (warmup+cosine)
-        if scheduler is not None:
-            scheduler.step()
+        history = []
 
-        # VALIDATION (no TTA, thr search)
-        (val_loss, val_acc_argmax, val_auc, val_f1_default, val_thr, val_f1_best, val_acc_best) = eval_epoch(model, eval_dl, criterion, device, thr=None, tta=False)
+        for ep in range(1, EPOCHS + 1):
+            start = time.time()
 
-        elapsed = time.time() - start
+            train_loss, train_acc = train_epoch(
+                model, train_dl, criterion, optimizer, device, scaler
+            )
+
+            # step schedulers that go every epoch (warmup+cosine)
+            if scheduler is not None:
+                scheduler.step()
+
+            # VALIDATION (no TTA, thr search)
+            (val_loss, val_acc_argmax, val_auc, val_f1_default, val_thr, val_f1_best, val_acc_best) = eval_epoch(model, eval_dl, criterion, device, thr=None, tta=False)
+
+            elapsed = time.time() - start
+
+            print(
+                f"Epoch {ep:02d}/{EPOCHS} | "
+                f"train_loss={train_loss:.4f} acc={train_acc:.4f} | "
+                f"val_loss={val_loss:.4f} acc={val_acc_argmax:.4f} "
+                f"auc={val_auc:.4f} f1={val_f1_default:.4f} "
+                f"bestF1={val_f1_best:.4f} @thr={val_thr:.2f} | "
+                f"time={elapsed:.1f}s | lr={optimizer.param_groups[0]['lr']:.2e}"
+            )
+
+            # log for report
+            history.append({
+                "epoch": ep,
+                "train_loss": train_loss,
+                "train_acc": train_acc,
+                "val_loss": val_loss,
+                "val_acc_argmax": val_acc_argmax,
+                "val_auc": val_auc,
+                "val_f1_default": val_f1_default,
+                "val_thr": val_thr,
+                "val_f1_best": val_f1_best,
+                "val_acc_best": val_acc_best,
+                "lr": optimizer.param_groups[0]["lr"],
+            })
+
+            # check improvement on VAL
+            improved = val_auc > best_val_auc
+            if improved:
+                best_val_auc = val_auc
+                best_val_thr = val_thr
+                best_epoch = ep
+                torch.save(model.state_dict(), best_path)
+                print(f"->Saved new best to {best_path} (val_auc={val_auc:.4f})")
+
+            # early stop
+            if ep - best_epoch >= patience:
+                print(f"Early stopping at epoch {ep} (no val improvement for {patience} epochs)")
+                break
+
+        # save history
+        with open("history.json", "w") as f:
+            json.dump(history, f, indent=2)
+
+        print("Training done. Loading best model and running FINAL TEST...")
+        model.load_state_dict(torch.load(best_path, map_location=device))
+        model.to(device)
+
+        # FINAL TEST: use best val threshold, and TTA=True if you like
+        (test_loss, test_acc_argmax, test_auc, test_f1_default, _, test_f1_best, test_acc_best) = eval_epoch(model, test_dl, criterion, device, thr=best_val_thr, test=True, tta=True)
 
         print(
-            f"Epoch {ep:02d}/{EPOCHS} | "
-            f"train_loss={train_loss:.4f} acc={train_acc:.4f} | "
-            f"val_loss={val_loss:.4f} acc={val_acc_argmax:.4f} "
-            f"auc={val_auc:.4f} f1={val_f1_default:.4f} "
-            f"bestF1={val_f1_best:.4f} @thr={val_thr:.2f} | "
-            f"time={elapsed:.1f}s | lr={optimizer.param_groups[0]['lr']:.2e}"
+            f"[FINAL TEST] loss={test_loss:.4f} | "
+            f"acc_argmax={test_acc_argmax:.4f} | "
+            f"acc@bestValThr={test_acc_best:.4f} | "
+            f"auc={test_auc:.4f} | "
+            f"f1_default={test_f1_default:.4f} | "
+            f"f1@bestValThr={test_f1_best:.4f} | "
+            f"thr_used={best_val_thr:.2f}"
         )
-
-        # log for report
-        history.append({
-            "epoch": ep,
-            "train_loss": train_loss,
-            "train_acc": train_acc,
-            "val_loss": val_loss,
-            "val_acc_argmax": val_acc_argmax,
-            "val_auc": val_auc,
-            "val_f1_default": val_f1_default,
-            "val_thr": val_thr,
-            "val_f1_best": val_f1_best,
-            "val_acc_best": val_acc_best,
-            "lr": optimizer.param_groups[0]["lr"],
-        })
-
-        # check improvement on VAL
-        improved = val_auc > best_val_auc
-        if improved:
-            best_val_auc = val_auc
-            best_val_thr = val_thr
-            best_epoch = ep
-            torch.save(model.state_dict(), best_path)
-            print(f"->Saved new best to {best_path} (val_auc={val_auc:.4f})")
-
-        # early stop
-        if ep - best_epoch >= patience:
-            print(f"Early stopping at epoch {ep} (no val improvement for {patience} epochs)")
-            break
-
-    # save history
-    with open("history.json", "w") as f:
-        json.dump(history, f, indent=2)
-
-    print("Training done. Loading best model and running FINAL TEST...")
-    model.load_state_dict(torch.load(best_path, map_location=device))
-    model.to(device)
-
-    # FINAL TEST: use best val threshold, and TTA=True if you like
-    (test_loss, test_acc_argmax, test_auc, test_f1_default, _, test_f1_best, test_acc_best) = eval_epoch(model, test_dl, criterion, device, thr=best_val_thr, test=True, tta=True)
-
-    print(
-        f"[FINAL TEST] loss={test_loss:.4f} | "
-        f"acc_argmax={test_acc_argmax:.4f} | "
-        f"acc@bestValThr={test_acc_best:.4f} | "
-        f"auc={test_auc:.4f} | "
-        f"f1_default={test_f1_default:.4f} | "
-        f"f1@bestValThr={test_f1_best:.4f} | "
-        f"thr_used={best_val_thr:.2f}"
-    )
+    except:
+        with open("history.json", "w") as f:
+            json.dump(history, f, indent=2) 
 
 if __name__ == "__main__":
     import multiprocessing as mp

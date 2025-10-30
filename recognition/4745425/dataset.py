@@ -47,7 +47,7 @@ def calculate_mean_std():
 
     print(f"Dataset mean: {mean.item():.6f}, std: {std.item():.6f}")
 
-def create_dataloaders(img_size: int, batch_size: int, val_frac: float = 0.15):
+def create_dataloaders(img_size: int, batch_size: int, val_frac: float = 0.2):
     # --- transforms ---
     train_tfms = transforms.Compose([
         transforms.Grayscale(num_output_channels=1),
