@@ -72,7 +72,7 @@ The model achieved a **test AUC of 0.6857** and **F1-score of 0.7342**, not meet
 ## Training Progress
 Below is the loss curve generated from the training history:
 
-![Training Loss](Figure_1.png)
+![Training Loss](val_metrics_200.png)
 
 From the loss history (`history.json`), validation AUC steadily improved from **0.60 → 0.95** over 51 epochs, with convergence after epoch ~45. The training accuracy reached ~0.89, showing effective learning without overfitting.
 
