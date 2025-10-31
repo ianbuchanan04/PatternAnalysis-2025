@@ -63,9 +63,9 @@ Dataset split:
 | Dataset | Accuracy | AUC | F1 | Best Threshold |
 |----------|-----------|-----|----|----------------|
 | Validation | 0.86 | 0.95 | 0.88 | 0.54 |
-| Test | 0.5304 | 0.5864 | 0.6720 | 0.62 |
+| Test | 0.6857 | 0.7701 | 0.7342 | 0.62 |
 
-The model achieved a **test AUC of 0.5864** and **F1-score of 0.6720**, not meeting the courses requirements.
+The model achieved a **test AUC of 0.6857** and **F1-score of 0.7342**, not meeting the courses requirements.
 
 ---
 

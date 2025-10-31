@@ -20,14 +20,12 @@ def main():
     ).to(device)
 
     # 2. Load the saved weights
-    # ckpt = torch.load("model", map_location=device)
-    # model.load_state_dict(ckpt["state_dict"])
-    # best_val_thr = ckpt.get("best_val_thr", 0.5)
-    state_dict = torch.load("best_model_val20.pt", weights_only=True)
-    model.load_state_dict(state_dict)
+    ckpt = torch.load("best_model_val20.pt", map_location=device)
+    model.load_state_dict(ckpt["state_dict"])
+    best_val_thr = ckpt.get("best_val_thr", 0.5)
 
     test_loss, acc_argmax, test_auc, f1_default, _, f1_best, acc_best = \
-        eval_epoch(model, test_dl, criterion, device, thr=0.7, tta=True)
+        eval_epoch(model, test_dl, criterion, device, thr=best_val_thr, tta=True)
 
     # 4. Print results
     print(f"TEST | loss={test_loss:.4f} acc={acc_best:.4f} auc={test_auc:.4f} f1={f1_best:.4f}")

@@ -263,7 +263,7 @@ def train():
             if score > best_val_auc or val_acc_best > best_acc_on_val:
                 best_val_auc = max(best_val_auc, score)
                 best_acc_on_val = max(best_acc_on_val, val_acc_best)
-                best_val_thr = val_thr              # <— keep the best threshold
+                best_val_thr = val_thr
                 best_epoch = ep
                 name = best_path + str(i)
                 torch.save({"state_dict": model.state_dict(),
@@ -278,23 +278,6 @@ def train():
         with open("history.json", "w") as f:
             json.dump(history, f, indent=2)
 
-        print("Training done. Loading best model and running FINAL TEST...")
-        ckpt = torch.load(best_path, map_location=device)
-        model.load_state_dict(ckpt["state_dict"])
-        best_val_thr = ckpt.get("best_val_thr", 0.5)
-
-        test_loss, acc_argmax, test_auc, f1_default, _, f1_best, acc_best = \
-            eval_epoch(model, test_dl, criterion, device, thr=best_val_thr, tta=True)
-
-        print(
-            f"[FINAL TEST] loss={test_loss:.4f} | "
-            f"acc_argmax={acc_argmax:.4f} | "
-            f"acc@bestValThr={acc_best:.4f} | "
-            f"auc={test_auc:.4f} | "
-            f"f1_default={f1_default:.4f} | "
-            f"f1@bestValThr={f1_best:.4f} | "
-            f"thr_used={best_val_thr:.2f}"
-        )
     except:
         with open("history_1.json", "w") as f:
             json.dump(history, f, indent=2) 
