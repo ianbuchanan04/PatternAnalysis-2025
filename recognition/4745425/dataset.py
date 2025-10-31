@@ -62,7 +62,7 @@ def normalize_per_image(tensor):
     std = tensor.std()
     return (tensor - mean) / (std + 1e-6)
 
-def create_dataloaders(img_size: int, batch_size: int, val_frac: float = 0.2):
+def create_dataloaders(img_size: int, batch_size: int, val_frac: float = 0.15):
     # ---------- 1) define transforms ----------
     train_tfms = transforms.Compose([
         transforms.Grayscale(1),
@@ -74,12 +74,11 @@ def create_dataloaders(img_size: int, batch_size: int, val_frac: float = 0.2):
 
     aug_tfms = transforms.Compose([
         transforms.Grayscale(1),
-        transforms.RandomResizedCrop(img_size, scale=(0.9, 1.0)),
+        transforms.RandomResizedCrop(img_size, scale=(0.95, 1.0)),
         transforms.RandomHorizontalFlip(0.5),
-        transforms.RandomApply([transforms.RandomRotation(10, fill=0)], p=0.8),
+        transforms.RandomApply([transforms.RandomRotation(10, fill=0)], p=0.3),
         transforms.ToTensor(),
-        transforms.RandomApply([transforms.GaussianBlur(kernel_size=3, sigma=(0.1, 0.5))], p=0.5),
-        transforms.RandomErasing(p=0.3, scale=(0.02, 0.15), ratio=(0.3, 3.3), value=0),
+        transforms.RandomApply([transforms.GaussianBlur(kernel_size=3, sigma=(0.1, 0.5))], p=0.1),
         transforms.Lambda(normalize_per_image),
     ])
 
@@ -122,8 +121,9 @@ def create_dataloaders(img_size: int, batch_size: int, val_frac: float = 0.2):
 
     # ---------- 5) make the +50% augmented train ----------
     # we ONLY augment from the train indices, not from the whole folder
-    n_aug = int(0.5 * len(train_idx))            # 50% of train
-    aug_indices = train_idx[:n_aug]              # could also shuffle first
+    rng.shuffle(train_idx)
+    n_aug = int(0.5 * len(train_idx))
+    aug_indices = train_idx[:n_aug]
     aug_train_ds = Subset(aug_full, aug_indices)
 
     # final train = 100% real + 50% aug

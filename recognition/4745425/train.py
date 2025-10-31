@@ -20,7 +20,7 @@ DROP_PATH_RATE  = 0.4
 HEAD_DROPOUT    = 0.5
 LABEL_SMOOTH    = 0.05
 GRAD_CLIP       = 2.0
-EARLY_STOP_PATIENCE = 8
+EARLY_STOP_PATIENCE = 5
 
 total = 0.0
 
@@ -186,6 +186,7 @@ def train():
         for _, labels in train_dl:
             for c in range(2):
                 class_counts[c] += (labels == c).sum()
+        class_counts = class_counts.to(device)
 
         print("created dataloaders")
         # ConvNext Tiny
@@ -196,7 +197,7 @@ def train():
         print("created model")
         model.head = nn.Sequential(nn.Dropout(p=HEAD_DROPOUT), model.head)
         
-        weights = torch.tensor([1.0346, 0.9676], device=device)
+        weights = (class_counts.sum() / (2.0 * class_counts)).to(device)
         criterion = nn.CrossEntropyLoss(weight=weights, label_smoothing=LABEL_SMOOTH)
 
         optimizer = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
@@ -267,7 +268,7 @@ def train():
                 best_epoch = ep
                 name = best_path + str(i)
                 torch.save({"state_dict": model.state_dict(),
-                            "best_val_thr": best_val_thr}, best_path)
+                            "best_val_thr": best_val_thr}, name)
 
             # early stop
             if ep - best_epoch >= patience:

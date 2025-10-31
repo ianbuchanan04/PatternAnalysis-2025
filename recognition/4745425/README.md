@@ -15,7 +15,7 @@ Training optimization was guided by **validation AUC**, and the model with the h
 1. **Input Processing:**  
    - MRI slices are converted to single-channel grayscale tensors.  
    - Normalized using mean and standard deviation from the dataset.  
-   - Augmentation applied: random resized crop and horizontal flip for robustness.
+   - Augmentation applied to supplement data: random resized crop and horizontal flip for robustness.
 
 2. **Model Architecture:**  
    - Backbone: `ConvNeXt(in_chans=1, num_classes=2)`  
@@ -24,16 +24,17 @@ Training optimization was guided by **validation AUC**, and the model with the h
 
 3. **Training Process:**  
    - Loss: weighted **CrossEntropyLoss** with class balancing.  
-   - Optimizer: **AdamW** with weight decay `5e-2`.  
-   - Scheduler: warmup (5 epochs) → cosine annealing.  
-   - Automatic mixed precision (AMP) used for faster training on GPU.  
-   - Early stopping with patience of 8 epochs based on validation AUC.  
+   - Optimizer: **AdamW** with weight decay `5e-2`.
+   - Scheduler: warmup (5 epochs) → cosine annealing.
+   - Automatic mixed precision (AMP) used for faster training on GPU.
+   - Early stopping with patience of 5 epochs based on validation AUC.
 
 4. **Evaluation Metrics:**  
    - Accuracy, **AUC**, and **F1-score** computed on validation and test sets.  
    - Best model checkpoint selected by validation AUC.  
    - Test-Time Augmentation (horizontal flip averaging) applied at inference.
 
+The optimal checkpoint was at epoch 20, where validation accuracy (0.6944), F1 (0.7088), and AUC (0.7785) reached their maxima before overfitting became apparent. Later epochs improved training metrics but did not improve validation, indicating the model had reached generalisation capacity.
 ---
 
 ## Training Setup
@@ -52,8 +53,8 @@ Training optimization was guided by **validation AUC**, and the model with the h
 | Early stop patience | 8 |
 
 Dataset split:  
-- **Train:** 70%  
-- **Validation:** 20%  
+- **Train:** 75%  
+- **Validation:** 15%  
 - **Test:** 10% (independent ADNI folder)
 
 ---
@@ -65,7 +66,7 @@ Dataset split:
 | Validation | 0.86 | 0.95 | 0.88 | 0.54 |
 | Test | 0.6857 | 0.7701 | 0.7342 | 0.62 |
 
-The model achieved a **test AUC of 0.6857** and **F1-score of 0.7342**, not meeting the courses requirements.
+The model achieved a **test AUC of 0.6944** and **F1-score of 0.7088**, not meeting the courses requirements.
 
 ---
 
@@ -74,11 +75,10 @@ Below is the loss curve generated from the training history:
 
 ![Training Loss](val_metrics_200.png)
 
-From the loss history (`history.json`), validation AUC steadily improved from **0.60 → 0.95** over 51 epochs, with convergence after epoch ~45. The training accuracy reached ~0.89, showing effective learning without overfitting.
+From the loss history, validation AUC steadily improved from **0.60 → 0.95** over 51 epochs, with convergence after epoch ~45. The training accuracy reached ~0.89, showing effective learning without overfitting.
 
 ---
 
-## Example Output
+## Output
 ```bash
-[FINAL TEST] loss=0.3938 | acc_argmax=0.8783 | acc@bestValThr=0.8887 |
-auc=0.9525 | f1_default=0.8849 | f1@bestValThr=0.8918 | thr_used=0.62    
+[TEST] | loss=1.0326, acc=0.6030, acc@best=0.6944 auc=0.7785 f1@0.5=0.7088, f1@best=0.7088, thr=0.89   
